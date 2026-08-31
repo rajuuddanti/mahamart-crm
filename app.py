@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -49,8 +50,9 @@ def format_inr(amount):
 # --- DATABASE CONNECTION ---
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    # This checks standard server variables first, then falls back to Streamlit secrets
+    url = os.environ.get("SUPABASE_URL") or st.secrets["SUPABASE_URL"]
+    key = os.environ.get("SUPABASE_KEY") or st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
 supabase = init_connection()
