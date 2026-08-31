@@ -58,7 +58,7 @@ current_date_str = today_date.strftime('%Y-%m-%d')
 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
-# SERVER-SIDE FETCHING FUNCTIONS (FOR 1.5M+ ROWS)
+# SERVER-SIDE FETCHING FUNCTIONS
 # ==========================================
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -72,12 +72,12 @@ def get_active_stores():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_bills_by_date(start_d, end_d, store_filter="All Stores"):
-    """Fetches bills ONLY for the selected date range & store to save RAM."""
+    """Fetches bills ONLY for the selected date range & store."""
     all_bills = []
     start = 0
     step = 1000
     while True:
-        query = supabase.table("bills").select("*") \
+        query = supabase.table("bills").select("customer_name, mobile_number, total_bill_value, bill_date, bill_no, qty, accumulated_points, redeem_points, store") \
             .gte("bill_date", start_d.strftime("%Y-%m-%d")) \
             .lte("bill_date", end_d.strftime("%Y-%m-%d"))
             
@@ -106,8 +106,8 @@ def get_bills_by_date(start_d, end_d, store_filter="All Stores"):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def search_customer_db(query, store_filter="All Stores"):
-    """Searches directly in Supabase. Ultra-fast for 1.5M rows."""
-    db_query = supabase.table("bills").select("*") \
+    """Searches directly in Supabase."""
+    db_query = supabase.table("bills").select("customer_name, mobile_number, total_bill_value, bill_date, bill_no, qty, accumulated_points, redeem_points, store") \
         .or_(f"mobile_number.ilike.%{query}%,customer_name.ilike.%{query}%")
         
     if store_filter != "All Stores":
@@ -121,6 +121,7 @@ def search_customer_db(query, store_filter="All Stores"):
         df['mobile_number'] = df['mobile_number'].fillna("No Mobile").astype(str).str.strip()
         df['customer_name'] = df['customer_name'].fillna("Guest").astype(str).str.strip()
         df['total_bill_value'] = pd.to_numeric(df['total_bill_value'], errors='coerce').fillna(0)
+        df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(0)
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -129,7 +130,6 @@ def get_calls_for_mobiles(mobile_list):
     if not mobile_list: return pd.DataFrame()
     
     all_calls = []
-    # Process in chunks of 100 to avoid API limits
     for i in range(0, len(mobile_list), 100):
         chunk = mobile_list[i:i+100]
         resp = supabase.table("call_logs").select("*").in_("mobile_number", chunk).execute()
@@ -192,7 +192,6 @@ with tab1:
         st.subheader("Customers at Risk of Churn")
         retention_filter = st.selectbox("Days Since Last Visit:", ["45-60 Days", "60-90 Days", "90+ Days"], key="t1_ret_filter")
         
-        # Calculate exactly the historical window we need
         if retention_filter == "45-60 Days":
             start_d = today_date - timedelta(days=60)
             end_d = today_date - timedelta(days=45)
@@ -200,7 +199,7 @@ with tab1:
             start_d = today_date - timedelta(days=90)
             end_d = today_date - timedelta(days=61)
         else:
-            start_d = today_date - timedelta(days=365) # Look back up to a year
+            start_d = today_date - timedelta(days=365)
             end_d = today_date - timedelta(days=91)
 
         with st.spinner(f"Finding churn customers for {selected_store}..."):
@@ -213,7 +212,6 @@ with tab1:
                 last_visit=('bill_date', 'max')
             ).reset_index()
             
-            # --- THE MAGIC REMOVAL SYSTEM ---
             potential_churn_mobs = retention_summary['mobile_number'].tolist()
             calls_for_churn = get_calls_for_mobiles(potential_churn_mobs)
             if not calls_for_churn.empty:
@@ -222,11 +220,9 @@ with tab1:
             
             display_df = retention_summary.sort_values(by="total_spent", ascending=False).head(100)
 
-    # Render Telecalling List
     st.markdown("### 👇 Click on a customer to expand details")
     
     if not display_df.empty:
-        # Fetch call logs only for the specific customers about to be rendered
         mobs_to_render = display_df['mobile_number'].tolist()
         calls_df = get_calls_for_mobiles(mobs_to_render)
         
@@ -293,7 +289,6 @@ with tab2:
     
     search_query = st.text_input("🔍 Search by Name (e.g. Guest) or Mobile Number:", key="t2_search")
     
-    # Only show date filter if we are NOT searching for a specific customer
     if not search_query:
         t2_dates = st.date_input("Select Date Range (Defaults to Today. Limits to Top 100):", value=(today_date,), key="t2_dates")
         if len(t2_dates) == 2:
@@ -317,9 +312,8 @@ with tab2:
             visits=('bill_no', 'nunique'),
             acc_points=('accumulated_points', 'sum'),
             red_points=('redeem_points', 'sum')
-        ).reset_index().sort_values(by="total_spent", ascending=False).head(100) # STRICT 100 LIMIT
+        ).reset_index().sort_values(by="total_spent", ascending=False).head(100)
         
-        # Fetch call logs for the 100 customers on screen
         mobs_to_lookup = search_summary['mobile_number'].tolist()
         calls_df_lookup = get_calls_for_mobiles(mobs_to_lookup)
             
@@ -348,6 +342,7 @@ with tab2:
                 st.markdown("**🛒 Bill History**")
                 cust_bills = result_df[(result_df['mobile_number'].astype(str) == mob) & (result_df['customer_name'].astype(str) == c_name)]
                 
+                # RESTORED QTY COLUMN HERE
                 table_bills = cust_bills[['bill_date', 'store', 'bill_no', 'qty', 'total_bill_value', 'accumulated_points', 'redeem_points']].copy()
                 table_bills['total_bill_value'] = table_bills['total_bill_value'].apply(lambda x: format_inr(x))
                 st.dataframe(table_bills.sort_values(by="bill_date", ascending=False), use_container_width=True, hide_index=True)
