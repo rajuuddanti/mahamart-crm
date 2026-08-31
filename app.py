@@ -6,12 +6,19 @@ from datetime import datetime, timedelta
 # --- PAGE SETUP ---
 st.set_page_config(page_title="MahaMart CRM", layout="wide")
 
-# --- HIDE STREAMLIT FOOTER & BOTTOM WATERMARK ONLY (KEEPS 3 DOTS) ---
+# --- HIDE STREAMLIT FOOTER & DISABLE BOTTOM WATERMARK (KEEPS 3 DOTS) ---
 hide_st_style = """
             <style>
-            footer {visibility: hidden;}
-            [data-testid="stViewerBadge"] {display: none;}
-            #viewerBadge {display: none;}
+            /* Hide the default footer */
+            footer {visibility: hidden !important;}
+            
+            /* Nuke the bottom-right badge: invisible, unclickable, and buried */
+            [data-testid="stViewerBadge"], #viewerBadge {
+                opacity: 0 !important;
+                pointer-events: none !important;
+                z-index: -9999 !important;
+                cursor: default !important;
+            }
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
