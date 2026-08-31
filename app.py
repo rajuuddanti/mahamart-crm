@@ -61,17 +61,30 @@ current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 # SERVER-SIDE FETCHING FUNCTIONS (FOR 1.5M+ ROWS)
 # ==========================================
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_active_stores():
+    """Grabs recent records to dynamically find active store names."""
+    response = supabase.table("bills").select("store").order("bill_date", desc=True).limit(5000).execute()
+    if response.data:
+        stores = pd.DataFrame(response.data)['store'].dropna().unique().tolist()
+        return ["All Stores"] + sorted(stores)
+    return ["All Stores"]
+
 @st.cache_data(ttl=300, show_spinner=False)
-def get_bills_by_date(start_d, end_d):
-    """Fetches bills ONLY for the selected date range to save RAM."""
+def get_bills_by_date(start_d, end_d, store_filter="All Stores"):
+    """Fetches bills ONLY for the selected date range & store to save RAM."""
     all_bills = []
     start = 0
     step = 1000
     while True:
-        response = supabase.table("bills").select("*") \
+        query = supabase.table("bills").select("*") \
             .gte("bill_date", start_d.strftime("%Y-%m-%d")) \
-            .lte("bill_date", end_d.strftime("%Y-%m-%d")) \
-            .range(start, start + step - 1).execute()
+            .lte("bill_date", end_d.strftime("%Y-%m-%d"))
+            
+        if store_filter != "All Stores":
+            query = query.eq("store", store_filter)
+            
+        response = query.range(start, start + step - 1).execute()
         
         data = response.data
         if not data: break
@@ -92,11 +105,15 @@ def get_bills_by_date(start_d, end_d):
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
-def search_customer_db(query):
+def search_customer_db(query, store_filter="All Stores"):
     """Searches directly in Supabase. Ultra-fast for 1.5M rows."""
-    response = supabase.table("bills").select("*") \
-        .or_(f"mobile_number.ilike.%{query}%,customer_name.ilike.%{query}%") \
-        .limit(1000).execute()
+    db_query = supabase.table("bills").select("*") \
+        .or_(f"mobile_number.ilike.%{query}%,customer_name.ilike.%{query}%")
+        
+    if store_filter != "All Stores":
+        db_query = db_query.eq("store", store_filter)
+        
+    response = db_query.limit(1000).execute()
         
     df = pd.DataFrame(response.data)
     if not df.empty:
@@ -130,6 +147,11 @@ def get_calls_for_mobiles(mobile_list):
         cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'comments'])
     return cdf
 
+# --- SIDEBAR FILTERS ---
+st.sidebar.header("Global Filters")
+stores_list = get_active_stores()
+selected_store = st.sidebar.selectbox("Select Store", stores_list)
+
 # ==========================================
 # TABS SETUP
 # ==========================================
@@ -154,8 +176,8 @@ with tab1:
         else:
             start_d = end_d = top40_dates[0]
             
-        with st.spinner("Fetching bills..."):
-            base_df = get_bills_by_date(start_d, end_d)
+        with st.spinner(f"Fetching bills for {selected_store}..."):
+            base_df = get_bills_by_date(start_d, end_d, selected_store)
             
         if not base_df.empty:
             base_df = base_df[(base_df['mobile_number'] != "No Mobile") & (base_df['mobile_number'] != "nan")]
@@ -181,8 +203,8 @@ with tab1:
             start_d = today_date - timedelta(days=365) # Look back up to a year
             end_d = today_date - timedelta(days=91)
 
-        with st.spinner(f"Finding customers from {start_d} to {end_d}..."):
-            base_df = get_bills_by_date(start_d, end_d)
+        with st.spinner(f"Finding churn customers for {selected_store}..."):
+            base_df = get_bills_by_date(start_d, end_d, selected_store)
             
         if not base_df.empty:
             base_df = base_df[(base_df['mobile_number'] != "No Mobile") & (base_df['mobile_number'] != "nan")]
@@ -192,11 +214,8 @@ with tab1:
             ).reset_index()
             
             # --- THE MAGIC REMOVAL SYSTEM ---
-            # 1. Get all the mobile numbers we found
             potential_churn_mobs = retention_summary['mobile_number'].tolist()
-            # 2. Fetch their call logs
             calls_for_churn = get_calls_for_mobiles(potential_churn_mobs)
-            # 3. If they are in the call logs at all, remove them from the list!
             if not calls_for_churn.empty:
                 called_numbers = calls_for_churn['mobile_number'].unique()
                 retention_summary = retention_summary[~retention_summary['mobile_number'].isin(called_numbers)]
@@ -282,12 +301,12 @@ with tab2:
         else:
             start_d2 = end_d2 = t2_dates[0]
             
-        with st.spinner("Fetching today's top bills..."):
-            result_df = get_bills_by_date(start_d2, end_d2)
+        with st.spinner(f"Fetching top bills for {selected_store}..."):
+            result_df = get_bills_by_date(start_d2, end_d2, selected_store)
         limit_msg = " (Showing Top 100 by Spend for selected date. Use search bar to find specific people!)"
     else:
-        with st.spinner("Searching database..."):
-            result_df = search_customer_db(search_query)
+        with st.spinner(f"Searching database in {selected_store}..."):
+            result_df = search_customer_db(search_query, selected_store)
         limit_msg = ""
         
     if not result_df.empty:
