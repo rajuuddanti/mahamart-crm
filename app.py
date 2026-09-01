@@ -58,29 +58,38 @@ current_date_str = today_date.strftime('%Y-%m-%d')
 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
-# SERVER-SIDE FETCHING FUNCTIONS
+# FAST SERVER-SIDE FETCHING FUNCTIONS
 # ==========================================
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_active_stores():
-    """Fetches ALL unique store locations from the database."""
+    """Fetches unique stores by inspecting recent bills from latest date in DB."""
     try:
-        response = supabase.table("bills").select("location").not_.is_("location", "null").execute()
-        if response.data:
-            df = pd.DataFrame(response.data)
-            stores = df['location'].dropna().str.strip().unique().tolist()
-            stores = [s for s in stores if s and s != "nan"]
-            return ["All Stores"] + sorted(stores)
+        latest_res = supabase.table("bills").select("bill_date").order("bill_date", desc=True).limit(1).execute()
+        if latest_res.data:
+            max_d = pd.to_datetime(latest_res.data[0]['bill_date']).date()
+            min_d = max_d - timedelta(days=60)
+            
+            res = supabase.table("bills").select("location") \
+                .gte("bill_date", min_d.strftime("%Y-%m-%d")) \
+                .lte("bill_date", max_d.strftime("%Y-%m-%d")) \
+                .limit(5000).execute()
+                
+            if res.data:
+                df = pd.DataFrame(res.data)
+                stores = df['location'].dropna().str.strip().unique().tolist()
+                stores = [s for s in stores if s and s != "nan"]
+                return ["All Stores"] + sorted(stores)
     except Exception:
         pass
     return ["All Stores"]
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_call_logs_by_date(start_d, end_d):
-    """Fetches call logs within a specific date range."""
+def get_call_logs_by_date(target_d):
+    """Fetches call logs for a single target date."""
+    target_str = target_d.strftime("%Y-%m-%d")
     response = supabase.table("call_logs").select("*") \
-        .gte("call_date", start_d.strftime("%Y-%m-%d")) \
-        .lte("call_date", end_d.strftime("%Y-%m-%d")) \
+        .eq("call_date", target_str) \
         .execute()
     
     df = pd.DataFrame(response.data)
@@ -92,27 +101,17 @@ def get_call_logs_by_date(start_d, end_d):
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_bills_by_date(start_d, end_d, store_filter="All Stores"):
-    all_bills = []
-    start = 0
-    step = 1000
-    while True:
-        query = supabase.table("bills").select("customer_name, customer_code, net_sales, bill_date, location") \
-            .gte("bill_date", start_d.strftime("%Y-%m-%d")) \
-            .lte("bill_date", end_d.strftime("%Y-%m-%d"))
-            
-        if store_filter != "All Stores":
-            query = query.eq("location", store_filter)
-            
-        response = query.range(start, start + step - 1).execute()
+def get_bills_by_single_date(target_d, store_filter="All Stores"):
+    """Fetches bills for ONE SINGLE target date for maximum performance."""
+    target_str = target_d.strftime("%Y-%m-%d")
+    query = supabase.table("bills").select("customer_name, customer_code, net_sales, bill_date, location") \
+        .eq("bill_date", target_str)
         
-        data = response.data
-        if not data: break
-        all_bills.extend(data)
-        if len(data) < step: break
-        start += step
+    if store_filter != "All Stores":
+        query = query.eq("location", store_filter)
         
-    df = pd.DataFrame(all_bills)
+    response = query.execute()
+    df = pd.DataFrame(response.data)
     if not df.empty:
         df['bill_date'] = pd.to_datetime(df['bill_date']).dt.date
         df['customer_code'] = df['customer_code'].fillna("No Mobile").astype(str).str.strip()
@@ -222,21 +221,17 @@ st.sidebar.subheader("Dashboard Controls")
 stores_list = get_active_stores()
 selected_store = st.sidebar.selectbox("Select Store", stores_list)
 
-global_call_dates = st.sidebar.date_input(
-    "Filter Calls by Date Range:", 
-    value=(today_date - timedelta(days=7), today_date),
-    key="global_call_dates"
+# RESTRICTED SINGLE DATE FILTER FOR CALL LOGS
+target_call_date = st.sidebar.date_input(
+    "Select Target Call Date:", 
+    value=today_date,
+    key="target_call_date"
 )
-
-if len(global_call_dates) == 2:
-    start_call_d, end_call_d = global_call_dates
-else:
-    start_call_d = end_call_d = global_call_dates[0]
 
 # ==========================================
 # OVERVIEW METRICS
 # ==========================================
-all_calls_df = get_call_logs_by_date(start_call_d, end_call_d)
+all_calls_df = get_call_logs_by_date(target_call_date)
 
 if not all_calls_df.empty:
     mobs = all_calls_df['mobile_number'].unique().tolist()
@@ -260,7 +255,7 @@ complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Comp
 good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)])
 suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)])
 
-st.markdown(f"### 📊 Call Summary ({start_call_d.strftime('%d %b %Y')} to {end_call_d.strftime('%d %b %Y')})")
+st.markdown(f"### 📊 Call Summary for Date: **{target_call_date.strftime('%d %b %Y')}**")
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("📞 Total Calls", f"{total_calls:,}")
 kpi2.metric("✅ Answered Calls", f"{len(answered_df):,}")
@@ -275,55 +270,24 @@ st.markdown("---")
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["📞 Feedback Calling List", "🏬 Store Feedback Analytics", "📜 Call & Feedback Audit"])
 
-# TAB 1: RETENTION & FEEDBACK LOGGING
+# TAB 1: SINGLE-DATE TARGET CALLING LIST
 with tab1:
     st.header("🎯 Customer Calling & Feedback Logging")
-    call_mode = st.radio("Select Target Customers:", ["🏆 Recent Top Spenders", "⚠️ Retention Targets"], horizontal=True, key="t1_mode")
-    display_df = pd.DataFrame()
     
-    if call_mode == "🏆 Recent Top Spenders":
-        st.subheader("High Value Recent Shoppers")
-        top40_dates = st.date_input("Select Shopping Date Range:", value=(today_date - timedelta(days=7), today_date), key="top40_dates")
-        start_d, end_d = (top40_dates[0], top40_dates[1]) if len(top40_dates) == 2 else (top40_dates[0], top40_dates[0])
-            
-        with st.spinner(f"Fetching shoppers for {selected_store}..."):
-            base_df = get_bills_by_date(start_d, end_d, selected_store)
-            
-        if not base_df.empty:
-            base_df = base_df[(base_df['customer_code'] != "No Mobile") & (base_df['customer_code'] != "nan")]
-            display_df = base_df.groupby(['customer_code', 'customer_name']).agg(
-                total_spent=('net_sales', 'sum'),
-                last_visit=('bill_date', 'max')
-            ).reset_index().sort_values(by="total_spent", ascending=False).head(40)
-            
-    else:
-        st.subheader("Retention Targets (No Purchase Recently)")
-        retention_filter = st.selectbox("Inactivity Period:", ["45-60 Days", "60-90 Days", "90+ Days"], key="t1_ret_filter")
+    st.subheader("High Value Shoppers by Single Date")
+    single_bill_date = st.date_input("Select Shopping Date:", value=today_date - timedelta(days=1), key="single_bill_date")
         
-        if retention_filter == "45-60 Days":
-            start_d, end_d = today_date - timedelta(days=60), today_date - timedelta(days=45)
-        elif retention_filter == "60-90 Days":
-            start_d, end_d = today_date - timedelta(days=90), today_date - timedelta(days=61)
-        else:
-            start_d, end_d = today_date - timedelta(days=365), today_date - timedelta(days=91)
-
-        with st.spinner(f"Finding churn risk customers for {selected_store}..."):
-            base_df = get_bills_by_date(start_d, end_d, selected_store)
-            
-        if not base_df.empty:
-            base_df = base_df[(base_df['customer_code'] != "No Mobile") & (base_df['customer_code'] != "nan")]
-            retention_summary = base_df.groupby(['customer_code', 'customer_name']).agg(
-                total_spent=('net_sales', 'sum'),
-                last_visit=('bill_date', 'max')
-            ).reset_index()
-            
-            potential_churn_mobs = retention_summary['customer_code'].tolist()
-            calls_for_churn = get_calls_for_mobiles(potential_churn_mobs)
-            if not calls_for_churn.empty:
-                called_numbers = calls_for_churn['mobile_number'].unique()
-                retention_summary = retention_summary[~retention_summary['customer_code'].isin(called_numbers)]
-            
-            display_df = retention_summary.sort_values(by="total_spent", ascending=False).head(100)
+    with st.spinner(f"Fetching shoppers for {single_bill_date}..."):
+        base_df = get_bills_by_single_date(single_bill_date, selected_store)
+        
+    if not base_df.empty:
+        base_df = base_df[(base_df['customer_code'] != "No Mobile") & (base_df['customer_code'] != "nan")]
+        display_df = base_df.groupby(['customer_code', 'customer_name']).agg(
+            total_spent=('net_sales', 'sum'),
+            last_visit=('bill_date', 'max')
+        ).reset_index().sort_values(by="total_spent", ascending=False).head(50)
+    else:
+        display_df = pd.DataFrame()
 
     st.markdown("### 👇 Click customer to log call status & feedback")
     
@@ -345,7 +309,7 @@ with tab1:
                 if latest_call['status'] == 'Answered' and call_d and call_d < today_date and call_d >= (today_date - timedelta(days=30)):
                     is_recently_answered = True
             
-            header_title = f"{row['customer_name']} | 📱 {mob} | Spent: {format_inr(row['total_spent'])} | Last Visit: {row['last_visit']} | [{call_status_label}]"
+            header_title = f"{row['customer_name']} | 📱 {mob} | Spent: {format_inr(row['total_spent'])} | Date: {row['last_visit']} | [{call_status_label}]"
             
             with st.expander(header_title):
                 if not cust_calls.empty:
@@ -385,11 +349,11 @@ with tab1:
                         st.cache_data.clear() 
                         st.rerun()
     else:
-        st.write("No customers found matching selection.")
+        st.write("No customers found for this specific date.")
 
-# TAB 2: STORE FEEDBACK ANALYTICS (CLEAN TABLES ONLY)
+# TAB 2: STORE FEEDBACK ANALYTICS (SINGLE DATE)
 with tab2:
-    st.header(f"🏬 Store-Wise Customer Feedback ({start_call_d.strftime('%d %b')} to {end_call_d.strftime('%d %b %Y')})")
+    st.header(f"🏬 Store Feedback Summary for {target_call_date.strftime('%d %b %Y')}")
     
     if not all_calls_df.empty:
         st.markdown("### 📊 Store Call Connection Breakdown")
@@ -406,16 +370,16 @@ with tab2:
             feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
             st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
         else:
-            st.info("No answered calls logged in this date range.")
+            st.info("No answered calls logged on this date.")
     else:
-        st.info("No call logs found for the selected date range.")
+        st.info("No call logs found for the selected date.")
 
 # TAB 3: AUDIT
 with tab3:
-    st.header(f"📜 Call & Feedback Audit Log ({start_call_d.strftime('%d %b')} to {end_call_d.strftime('%d %b %Y')})")
+    st.header(f"📜 Call & Feedback Audit Log for {target_call_date.strftime('%d %b %Y')}")
     if not filtered_calls_df.empty:
         audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
         audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Feedback Category', 'Customer Remarks']
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
     else:
-        st.info("No call audit records found for this date range.")
+        st.info("No call audit records found for this date.")
