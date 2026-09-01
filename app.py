@@ -61,12 +61,15 @@ current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 # SERVER-SIDE FETCHING FUNCTIONS
 # ==========================================
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_active_stores():
+    """Fetches ALL unique store locations from the database."""
     try:
-        response = supabase.table("bills").select("location").order("bill_date", desc=True).limit(2000).execute()
+        response = supabase.table("bills").select("location").not_.is_("location", "null").execute()
         if response.data:
-            stores = pd.DataFrame(response.data)['location'].dropna().unique().tolist()
+            df = pd.DataFrame(response.data)
+            stores = df['location'].dropna().str.strip().unique().tolist()
+            stores = [s for s in stores if s and s != "nan"]
             return ["All Stores"] + sorted(stores)
     except Exception:
         pass
