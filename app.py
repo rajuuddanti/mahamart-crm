@@ -73,8 +73,13 @@ def get_active_stores():
     return ["All Stores"]
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_all_call_logs():
-    response = supabase.table("call_logs").select("*").execute()
+def get_call_logs_by_date(start_d, end_d):
+    """Fetches call logs within a specific date range."""
+    response = supabase.table("call_logs").select("*") \
+        .gte("call_date", start_d.strftime("%Y-%m-%d")) \
+        .lte("call_date", end_d.strftime("%Y-%m-%d")) \
+        .execute()
+    
     df = pd.DataFrame(response.data)
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
@@ -194,15 +199,41 @@ if uploaded_file is not None:
             except Exception as e:
                 st.sidebar.error(f"❌ Upload Error: {e}")
 
+# 3. DELETE WRONG UPLOAD
 st.sidebar.markdown("---")
-st.sidebar.subheader("Filter Dashboard")
+st.sidebar.subheader("🗑️ Delete Wrong Upload")
+delete_date = st.sidebar.date_input("Select Bill Date to Delete", value=today_date, key="del_date_input")
+
+if st.sidebar.button("❌ Delete Bills for Selected Date"):
+    try:
+        formatted_del_date = delete_date.strftime("%Y-%m-%d")
+        supabase.table("bills").delete().eq("bill_date", formatted_del_date).execute()
+        st.sidebar.success(f"✅ Deleted all bills for {formatted_del_date}!")
+        st.cache_data.clear()
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"❌ Delete Error: {e}")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Dashboard Controls")
 stores_list = get_active_stores()
 selected_store = st.sidebar.selectbox("Select Store", stores_list)
+
+global_call_dates = st.sidebar.date_input(
+    "Filter Calls by Date Range:", 
+    value=(today_date - timedelta(days=7), today_date),
+    key="global_call_dates"
+)
+
+if len(global_call_dates) == 2:
+    start_call_d, end_call_d = global_call_dates
+else:
+    start_call_d = end_call_d = global_call_dates[0]
 
 # ==========================================
 # OVERVIEW METRICS
 # ==========================================
-all_calls_df = get_all_call_logs()
+all_calls_df = get_call_logs_by_date(start_call_d, end_call_d)
 
 if not all_calls_df.empty:
     mobs = all_calls_df['mobile_number'].unique().tolist()
@@ -226,7 +257,7 @@ complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Comp
 good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)])
 suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)])
 
-st.markdown("### 📊 Overall Feedback & Call Summary")
+st.markdown(f"### 📊 Call Summary ({start_call_d.strftime('%d %b %Y')} to {end_call_d.strftime('%d %b %Y')})")
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("📞 Total Calls", f"{total_calls:,}")
 kpi2.metric("✅ Answered Calls", f"{len(answered_df):,}")
@@ -249,7 +280,7 @@ with tab1:
     
     if call_mode == "🏆 Recent Top Spenders":
         st.subheader("High Value Recent Shoppers")
-        top40_dates = st.date_input("Select Billing Date Range:", value=(today_date - timedelta(days=7), today_date), key="top40_dates")
+        top40_dates = st.date_input("Select Shopping Date Range:", value=(today_date - timedelta(days=7), today_date), key="top40_dates")
         start_d, end_d = (top40_dates[0], top40_dates[1]) if len(top40_dates) == 2 else (top40_dates[0], top40_dates[0])
             
         with st.spinner(f"Fetching shoppers for {selected_store}..."):
@@ -323,7 +354,7 @@ with tab1:
                     st.info("ℹ️ No past calls recorded for this customer.")
                 
                 if is_recently_answered:
-                    st.warning("🚫 **Calling Locked:** Customer already gave feedback within the last 30 days.")
+                    st.warning("🚫 **Calling Locked:** Customer gave feedback within the last 30 days.")
                 else:
                     st.markdown("**📝 Record New Call & Feedback**")
                     c_status = st.selectbox("Call Connection Status", ["Answered", "Not Answered", "Switched Off", "Not Reachable"], key=f"status_{mob}_{index}")
@@ -353,35 +384,35 @@ with tab1:
     else:
         st.write("No customers found matching selection.")
 
-# TAB 2: STORE FEEDBACK ANALYTICS
+# TAB 2: STORE FEEDBACK ANALYTICS (CLEAN TABLES ONLY)
 with tab2:
-    st.header("🏬 Store-Wise Customer Feedback Comparison")
+    st.header(f"🏬 Store-Wise Customer Feedback ({start_call_d.strftime('%d %b')} to {end_call_d.strftime('%d %b %Y')})")
+    
     if not all_calls_df.empty:
-        st.markdown("### 📊 Call Connection Breakdown")
+        st.markdown("### 📊 Store Call Connection Breakdown")
         store_calls = all_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
         for col in ["Answered", "Not Answered", "Not Reachable", "Switched Off"]:
             if col not in store_calls.columns: store_calls[col] = 0
         st.dataframe(store_calls, use_container_width=True, hide_index=True)
         
         st.markdown("---")
-        st.markdown("### 💬 Answered Calls Feedback Breakdown (Complaints vs Good Service)")
+        st.markdown("### 💬 Answered Calls Feedback Breakdown")
         answered_calls_df = all_calls_df[all_calls_df['status'] == 'Answered']
         
         if not answered_calls_df.empty:
             feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
             st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
-            st.bar_chart(feedback_summary.set_index('location'))
         else:
-            st.info("No answered calls logged yet to analyze feedback categories.")
+            st.info("No answered calls logged in this date range.")
     else:
-        st.info("No calls logged yet.")
+        st.info("No call logs found for the selected date range.")
 
 # TAB 3: AUDIT
 with tab3:
-    st.header("📜 Complete Call & Feedback Audit Log")
+    st.header(f"📜 Call & Feedback Audit Log ({start_call_d.strftime('%d %b')} to {end_call_d.strftime('%d %b %Y')})")
     if not filtered_calls_df.empty:
         audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
         audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Feedback Category', 'Customer Remarks']
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
     else:
-        st.info("No records found.")
+        st.info("No call audit records found for this date range.")
