@@ -5,7 +5,7 @@ from supabase import create_client
 from datetime import datetime, timedelta
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="MahaMart Telecalling CRM", layout="wide")
+st.set_page_config(page_title="MahaMart Feedback CRM", layout="wide")
 
 hide_st_style = """
             <style>
@@ -20,7 +20,7 @@ hide_st_style = """
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-st.title("📞 MahaMart Telecalling & Retention CRM")
+st.title("🗣️ MahaMart Customer Feedback & Service CRM")
 
 # --- INDIAN CURRENCY FORMATTER ---
 def format_inr(amount):
@@ -79,6 +79,8 @@ def get_all_call_logs():
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
         df['display_time'] = df['call_time'].fillna(df['call_date'].astype(str))
+        if 'feedback_type' not in df.columns:
+            df['feedback_type'] = 'General'
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -126,8 +128,10 @@ def get_calls_for_mobiles(mobile_list):
     if not cdf.empty:
         cdf['display_time'] = cdf['call_time'].fillna(cdf['call_date'])
         cdf['parsed_date'] = pd.to_datetime(cdf['call_date'], errors='coerce').dt.date
+        if 'feedback_type' not in cdf.columns:
+            cdf['feedback_type'] = 'General'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'comments'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -161,10 +165,7 @@ if uploaded_file is not None:
             try:
                 df_up = pd.read_csv(uploaded_file)
                 
-                # Format bill_date (supports '31-Aug-26' or '2026-08-31')
                 df_up['bill_date'] = pd.to_datetime(df_up['bill_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-                
-                # Format text fields
                 df_up['location'] = df_up['location'].fillna("Unknown").astype(str).str.strip()
                 df_up['pos_machineno'] = df_up['pos_machineno'].fillna("").astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 df_up['billno'] = df_up['billno'].astype(str).str.strip()
@@ -172,12 +173,10 @@ if uploaded_file is not None:
                 df_up['net_sales'] = pd.to_numeric(df_up['net_sales'], errors='coerce').fillna(0)
                 df_up['sold_qty'] = pd.to_numeric(df_up['sold_qty'], errors='coerce').fillna(0)
                 
-                # Clean customer_code (mobile)
                 df_up['customer_code'] = df_up['customer_code'].fillna("No Mobile").astype(str)
                 df_up['customer_code'] = df_up['customer_code'].str.replace(r'\.0$', '', regex=True).str.strip()
                 df_up.loc[df_up['customer_code'].isin(["", "nan", "NaN"]), 'customer_code'] = "No Mobile"
 
-                # Keep exact headers
                 clean_df = df_up[['bill_date', 'location', 'pos_machineno', 'billno', 'customer_code', 'customer_name', 'net_sales', 'sold_qty']].copy()
                 clean_df = clean_df.dropna(subset=['bill_date'])
 
@@ -219,41 +218,41 @@ if not all_calls_df.empty:
     else:
         filtered_calls_df = all_calls_df
 else:
-    filtered_calls_df = pd.DataFrame(columns=['id', 'mobile_number', 'call_date', 'status', 'comments', 'call_time', 'location'])
+    filtered_calls_df = pd.DataFrame(columns=['id', 'mobile_number', 'call_date', 'status', 'feedback_type', 'comments', 'call_time', 'location'])
 
 total_calls = len(filtered_calls_df)
-answered_calls = len(filtered_calls_df[filtered_calls_df['status'] == 'Answered'])
-not_answered_calls = len(filtered_calls_df[filtered_calls_df['status'] == 'Not Answered'])
-not_reachable_calls = len(filtered_calls_df[filtered_calls_df['status'] == 'Not Reachable'])
-switched_off_calls = len(filtered_calls_df[filtered_calls_df['status'] == 'Switched Off'])
+answered_df = filtered_calls_df[filtered_calls_df['status'] == 'Answered']
+complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Complaint', na=False)])
+good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)])
+suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)])
 
-st.markdown("### 📊 Overall Telecalling Performance")
+st.markdown("### 📊 Overall Feedback & Call Summary")
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("📞 Total Calls", f"{total_calls:,}")
-kpi2.metric("✅ Answered", f"{answered_calls:,}")
-kpi3.metric("❌ Not Answered", f"{not_answered_calls:,}")
-kpi4.metric("📵 Not Reachable", f"{not_reachable_calls:,}")
-kpi5.metric("📴 Switched Off", f"{switched_off_calls:,}")
+kpi2.metric("✅ Answered Calls", f"{len(answered_df):,}")
+kpi3.metric("🟢 Good Service", f"{good_service_cnt:,}")
+kpi4.metric("🔴 Complaints", f"{complaints_cnt:,}")
+kpi5.metric("🟡 Suggestions", f"{suggestions_cnt:,}")
 
 st.markdown("---")
 
 # ==========================================
 # TABS SETUP
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["📞 Retention & Calling List", "🏬 Store-Wise Analytics", "📜 Call History Audit"])
+tab1, tab2, tab3 = st.tabs(["📞 Feedback Calling List", "🏬 Store Feedback Analytics", "📜 Call & Feedback Audit"])
 
-# TAB 1: RETENTION
+# TAB 1: RETENTION & FEEDBACK LOGGING
 with tab1:
-    st.header("🎯 Customer Calling Lists")
-    call_mode = st.radio("Select Module:", ["🏆 Top Spenders", "⚠️ Retention Calling"], horizontal=True, key="t1_mode")
+    st.header("🎯 Customer Calling & Feedback Logging")
+    call_mode = st.radio("Select Target Customers:", ["🏆 Recent Top Spenders", "⚠️ Retention Targets"], horizontal=True, key="t1_mode")
     display_df = pd.DataFrame()
     
-    if call_mode == "🏆 Top Spenders":
-        st.subheader("Highest Value Customers")
-        top40_dates = st.date_input("Select Date Range:", value=(today_date - timedelta(days=7), today_date), key="top40_dates")
+    if call_mode == "🏆 Recent Top Spenders":
+        st.subheader("High Value Recent Shoppers")
+        top40_dates = st.date_input("Select Billing Date Range:", value=(today_date - timedelta(days=7), today_date), key="top40_dates")
         start_d, end_d = (top40_dates[0], top40_dates[1]) if len(top40_dates) == 2 else (top40_dates[0], top40_dates[0])
             
-        with st.spinner(f"Fetching spenders for {selected_store}..."):
+        with st.spinner(f"Fetching shoppers for {selected_store}..."):
             base_df = get_bills_by_date(start_d, end_d, selected_store)
             
         if not base_df.empty:
@@ -264,8 +263,8 @@ with tab1:
             ).reset_index().sort_values(by="total_spent", ascending=False).head(40)
             
     else:
-        st.subheader("Retention Targets (Churn Risk)")
-        retention_filter = st.selectbox("Inactivity Window:", ["45-60 Days", "60-90 Days", "90+ Days"], key="t1_ret_filter")
+        st.subheader("Retention Targets (No Purchase Recently)")
+        retention_filter = st.selectbox("Inactivity Period:", ["45-60 Days", "60-90 Days", "90+ Days"], key="t1_ret_filter")
         
         if retention_filter == "45-60 Days":
             start_d, end_d = today_date - timedelta(days=60), today_date - timedelta(days=45)
@@ -274,7 +273,7 @@ with tab1:
         else:
             start_d, end_d = today_date - timedelta(days=365), today_date - timedelta(days=91)
 
-        with st.spinner(f"Finding retention targets for {selected_store}..."):
+        with st.spinner(f"Finding churn risk customers for {selected_store}..."):
             base_df = get_bills_by_date(start_d, end_d, selected_store)
             
         if not base_df.empty:
@@ -292,7 +291,7 @@ with tab1:
             
             display_df = retention_summary.sort_values(by="total_spent", ascending=False).head(100)
 
-    st.markdown("### 👇 Click customer to view history & log call outcome")
+    st.markdown("### 👇 Click customer to log call status & feedback")
     
     if not display_df.empty:
         mobs_to_render = display_df['customer_code'].tolist()
@@ -306,7 +305,8 @@ with tab1:
             
             if not cust_calls.empty:
                 latest_call = cust_calls.iloc[-1]
-                call_status_label = f"Last Called: {latest_call.get('display_time', '')} ({latest_call['status']})"
+                fb_tag = f" | {latest_call.get('feedback_type', '')}" if latest_call['status'] == 'Answered' else ""
+                call_status_label = f"Last Called: {latest_call.get('display_time', '')} ({latest_call['status']}{fb_tag})"
                 call_d = latest_call.get('parsed_date')
                 if latest_call['status'] == 'Answered' and call_d and call_d < today_date and call_d >= (today_date - timedelta(days=30)):
                     is_recently_answered = True
@@ -315,56 +315,73 @@ with tab1:
             
             with st.expander(header_title):
                 if not cust_calls.empty:
-                    st.info(f"📞 **Last Call:** {latest_call.get('display_time', '')} | Outcome: **{latest_call['status']}**")
+                    st.info(f"📞 **Last Call Outcome:** {latest_call.get('display_time', '')} | Status: **{latest_call['status']}** | Feedback: **{latest_call.get('feedback_type', 'N/A')}**")
                     if latest_call['comments']:
                         st.write(f"💬 *Remarks:* {latest_call['comments']}")
-                    st.dataframe(cust_calls[['display_time', 'status', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
+                    st.dataframe(cust_calls[['display_time', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
                 else:
-                    st.info("ℹ️ No call history recorded for this customer yet.")
+                    st.info("ℹ️ No past calls recorded for this customer.")
                 
                 if is_recently_answered:
-                    st.warning("🚫 **Calling Locked:** Customer answered within last 30 days.")
+                    st.warning("🚫 **Calling Locked:** Customer already gave feedback within the last 30 days.")
                 else:
-                    st.markdown("**📝 Log Call Outcome**")
-                    c_status = st.selectbox("Outcome", ["Answered", "Not Answered", "Switched Off", "Not Reachable"], key=f"status_{mob}_{index}")
-                    c_comments = st.text_area("Remarks", key=f"comm_{mob}_{index}")
+                    st.markdown("**📝 Record New Call & Feedback**")
+                    c_status = st.selectbox("Call Connection Status", ["Answered", "Not Answered", "Switched Off", "Not Reachable"], key=f"status_{mob}_{index}")
                     
-                    if st.button("Save Call Outcome", key=f"btn_{mob}_{index}"):
+                    c_feedback = "N/A"
+                    if c_status == "Answered":
+                        c_feedback = st.selectbox(
+                            "Customer Feedback Category", 
+                            ["🟢 Good Service", "🔴 Complaint", "🟡 Suggestion", "🔵 General Feedback / Inquiry"], 
+                            key=f"fb_{mob}_{index}"
+                        )
+                        
+                    c_comments = st.text_area("Detailed Customer Remarks / Notes", key=f"comm_{mob}_{index}")
+                    
+                    if st.button("Save Feedback", key=f"btn_{mob}_{index}"):
                         supabase.table("call_logs").insert({
                             "mobile_number": mob,
                             "status": c_status,
+                            "feedback_type": c_feedback,
                             "comments": c_comments,
                             "call_date": current_date_str,
                             "call_time": current_time_str
                         }).execute()
-                        st.success("Saved!")
+                        st.success("Feedback logged successfully!")
                         st.cache_data.clear() 
                         st.rerun()
     else:
-        st.write("No customers found.")
+        st.write("No customers found matching selection.")
 
-# TAB 2: STORE ANALYTICS
+# TAB 2: STORE FEEDBACK ANALYTICS
 with tab2:
-    st.header("🏬 Store-Wise Performance")
+    st.header("🏬 Store-Wise Customer Feedback Comparison")
     if not all_calls_df.empty:
-        store_summary = all_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
+        st.markdown("### 📊 Call Connection Breakdown")
+        store_calls = all_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
         for col in ["Answered", "Not Answered", "Not Reachable", "Switched Off"]:
-            if col not in store_summary.columns: store_summary[col] = 0
-                
-        store_summary['Total Calls'] = store_summary["Answered"] + store_summary["Not Answered"] + store_summary["Not Reachable"] + store_summary["Switched Off"]
-        store_summary['Answer Rate (%)'] = (store_summary["Answered"] / store_summary['Total Calls'] * 100).round(1).astype(str) + "%"
+            if col not in store_calls.columns: store_calls[col] = 0
+        st.dataframe(store_calls, use_container_width=True, hide_index=True)
         
-        st.dataframe(store_summary[['location', 'Total Calls', 'Answered', 'Not Answered', 'Not Reachable', 'Switched Off', 'Answer Rate (%)']], use_container_width=True, hide_index=True)
-        st.bar_chart(store_summary.set_index('location')[["Answered", "Not Answered", "Not Reachable", "Switched Off"]])
+        st.markdown("---")
+        st.markdown("### 💬 Answered Calls Feedback Breakdown (Complaints vs Good Service)")
+        answered_calls_df = all_calls_df[all_calls_df['status'] == 'Answered']
+        
+        if not answered_calls_df.empty:
+            feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
+            st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
+            st.bar_chart(feedback_summary.set_index('location'))
+        else:
+            st.info("No answered calls logged yet to analyze feedback categories.")
     else:
         st.info("No calls logged yet.")
 
 # TAB 3: AUDIT
 with tab3:
-    st.header("📜 Complete Call Audit Log")
+    st.header("📜 Complete Call & Feedback Audit Log")
     if not filtered_calls_df.empty:
-        audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'comments']].sort_values(by="display_time", ascending=False)
-        audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Comments']
+        audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
+        audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Feedback Category', 'Customer Remarks']
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
     else:
         st.info("No records found.")
