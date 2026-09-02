@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="MahaMart Feedback CRM", layout="wide")
@@ -52,10 +53,13 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- GLOBAL VARIABLES ---
-today_date = datetime.today().date()
+# --- GLOBAL VARIABLES (IST TIMEZONE) ---
+ist_tz = ZoneInfo("Asia/Kolkata")
+now_ist = datetime.now(ist_tz)
+
+today_date = now_ist.date()
 current_date_str = today_date.strftime('%Y-%m-%d')
-current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+current_time_str = now_ist.strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
 # SERVER-SIDE FETCHING FUNCTIONS
@@ -246,7 +250,7 @@ if uploaded_file is not None:
             except Exception as e:
                 st.sidebar.error(f"❌ Upload Error: {e}")
 
-# 3. DELETE WRONG UPLOAD
+# 3. DELETE WRONG UPLOADS
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗑️ Delete Wrong Upload")
 delete_date = st.sidebar.date_input("Select Bill Date to Delete", value=today_date, key="del_date_input")
