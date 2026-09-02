@@ -96,6 +96,10 @@ def get_call_logs_by_range(start_d, end_d, store_filter="All Stores", type_filte
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
         df['display_time'] = df['call_date'].astype(str)
+        if 'customer_name' not in df.columns:
+            df['customer_name'] = 'Guest'
+        else:
+            df['customer_name'] = df['customer_name'].fillna('Guest')
         if 'feedback_type' not in df.columns:
             df['feedback_type'] = 'General'
         if 'location' not in df.columns:
@@ -170,6 +174,8 @@ def get_calls_for_mobiles(mobile_list):
     if not cdf.empty:
         cdf['display_time'] = cdf['call_date'].astype(str)
         cdf['parsed_date'] = pd.to_datetime(cdf['call_date'], errors='coerce').dt.date
+        if 'customer_name' not in cdf.columns:
+            cdf['customer_name'] = 'Guest'
         if 'feedback_type' not in cdf.columns:
             cdf['feedback_type'] = 'General'
         if 'location' not in cdf.columns:
@@ -177,7 +183,7 @@ def get_calls_for_mobiles(mobile_list):
         if 'outreach_type' not in cdf.columns:
             cdf['outreach_type'] = 'Daily High Value'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'customer_name', 'call_date', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -354,6 +360,7 @@ with tab1:
         
         for index, row in display_df.iterrows():
             mob = str(row['customer_code'])
+            cust_name = str(row.get('customer_name', 'Guest'))
             cust_store = str(row['location'])
             cust_calls = pd.DataFrame() if calls_df.empty else calls_df[calls_df['mobile_number'].astype(str) == mob]
             call_status_label = "Never Called"
@@ -371,7 +378,7 @@ with tab1:
             last_billed_str = row['last_billed_date'].strftime('%d %b %Y')
             days_inactive = row['days_inactive']
             
-            header_title = f"{row['customer_name']} | 📱 {mob} | Last Bill: {format_inr(last_bill_amt)} | Last Billed: {last_billed_str} ({days_inactive} days ago) | [{call_status_label}]"
+            header_title = f"{cust_name} | 📱 {mob} | Last Bill: {format_inr(last_bill_amt)} | Last Billed: {last_billed_str} ({days_inactive} days ago) | [{call_status_label}]"
             
             with st.expander(header_title):
                 st.markdown(f"🗓️ **Last Visit Details:** Customer last shopped at **{cust_store}** on **{last_billed_str}** (**{days_inactive} days ago**).")
@@ -403,6 +410,7 @@ with tab1:
                     if st.button("Save Feedback", key=f"btn_{mob}_{index}"):
                         supabase.table("call_logs").insert({
                             "mobile_number": mob,
+                            "customer_name": cust_name,
                             "location": cust_store,
                             "outreach_type": current_outreach_tag,
                             "status": c_status,
@@ -410,7 +418,7 @@ with tab1:
                             "comments": c_comments,
                             "call_date": current_date_str
                         }).execute()
-                        st.success(f"Feedback logged for {cust_store}!")
+                        st.success(f"Feedback logged for {cust_name} ({cust_store})!")
                         st.cache_data.clear() 
                         st.rerun()
     else:
@@ -456,8 +464,8 @@ with tab3:
     st.caption(f"Filtered by Outreach Strategy: **{outreach_filter}**")
     
     if not range_calls_df.empty:
-        audit_df = range_calls_df[['display_time', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
-        audit_df.columns = ['Date', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
+        audit_df = range_calls_df[['display_time', 'customer_name', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
+        audit_df.columns = ['Date', 'Customer Name', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
         
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
         
