@@ -246,7 +246,7 @@ if uploaded_file is not None:
             except Exception as e:
                 st.sidebar.error(f"❌ Upload Error: {e}")
 
-# 3. DELETE WRONG UPLOADS
+# 3. DELETE WRONG UPLOAD
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗑️ Delete Wrong Upload")
 delete_date = st.sidebar.date_input("Select Bill Date to Delete", value=today_date, key="del_date_input")
@@ -264,14 +264,20 @@ if st.sidebar.button("❌ Delete Bills for Selected Date"):
 # 4. GLOBAL DASHBOARD CONTROLS
 st.sidebar.markdown("---")
 st.sidebar.subheader("Dashboard Controls")
+
 stores_list = get_active_stores()
-selected_store = st.sidebar.selectbox("Select Store", stores_list)
+selected_store = st.sidebar.selectbox("Select Store", stores_list, key="global_store_select")
 
 st.sidebar.markdown("**Analytics & Audit Filters:**")
-outreach_filter = st.sidebar.selectbox("Outreach Strategy Filter", ["All Types", "Daily High Value", "Retention Target"])
+outreach_filter = st.sidebar.selectbox(
+    "Outreach Strategy Filter", 
+    ["All Types", "Daily High Value", "Retention Target"],
+    key="global_outreach_filter"
+)
+
 col_s1, col_s2 = st.sidebar.columns(2)
-start_date = col_s1.date_input("From Date:", value=today_date, key="analytics_start_date")
-end_date = col_s2.date_input("To Date:", value=today_date, key="analytics_end_date")
+start_date = col_s1.date_input("From Date:", value=today_date, key="analytics_from_date")
+end_date = col_s2.date_input("To Date:", value=today_date, key="analytics_to_date")
 
 # ==========================================
 # OVERVIEW METRICS (RANGE FILTERED)
@@ -424,6 +430,7 @@ with tab2:
         store_calls = range_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
         for col in ["Answered", "Not Answered", "Not Reachable", "Switched Off"]:
             if col not in store_calls.columns: store_calls[col] = 0
+            
         st.dataframe(store_calls, use_container_width=True, hide_index=True)
         
         st.markdown("---")
@@ -433,6 +440,16 @@ with tab2:
         if not answered_calls_df.empty:
             feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
             st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
+            
+            # CSV EXPORT FOR ANALYTICS SUMMARY
+            analytics_csv = feedback_summary.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export Analytics Summary CSV",
+                data=analytics_csv,
+                file_name=f"Analytics_Summary_{start_date}_to_{end_date}.csv",
+                mime="text/csv",
+                key="dl_analytics_summary"
+            )
         else:
             st.info("No answered calls logged within this date range.")
     else:
@@ -446,6 +463,17 @@ with tab3:
     if not range_calls_df.empty:
         audit_df = range_calls_df[['display_time', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
         audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
+        
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        
+        # CSV EXPORT FOR DETAILED AUDIT LOG
+        audit_csv = audit_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Export Call Audit Log CSV",
+            data=audit_csv,
+            file_name=f"Call_Audit_Log_{start_date}_to_{end_date}.csv",
+            mime="text/csv",
+            key="dl_audit_log"
+        )
     else:
         st.info("No call audit records found for this date range.")
