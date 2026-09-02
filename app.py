@@ -52,13 +52,9 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- GLOBAL VARIABLES (IST TIMEZONE VIA OFFSET) ---
-ist_offset = timedelta(hours=5, minutes=30)
-now_ist = datetime.utcnow() + ist_offset
-
-today_date = now_ist.date()
+# --- GLOBAL VARIABLES (PURE DATE ONLY) ---
+today_date = datetime.now().date()
 current_date_str = today_date.strftime('%Y-%m-%d')
-current_time_str = now_ist.strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
 # SERVER-SIDE FETCHING FUNCTIONS
@@ -99,7 +95,7 @@ def get_call_logs_by_range(start_d, end_d, store_filter="All Stores", type_filte
     df = pd.DataFrame(response.data)
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
-        df['display_time'] = df['call_time'].fillna(df['call_date'].astype(str))
+        df['display_time'] = df['call_date'].astype(str)
         if 'feedback_type' not in df.columns:
             df['feedback_type'] = 'General'
         if 'location' not in df.columns:
@@ -114,7 +110,6 @@ def get_call_logs_by_range(start_d, end_d, store_filter="All Stores", type_filte
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_bills_by_single_date(target_d, store_filter="All Stores"):
-    """Fetches top 40 bills for ONE SINGLE target date for Regular High Value Calling."""
     target_str = target_d.strftime("%Y-%m-%d")
     query = supabase.table("bills").select("customer_name, customer_code, net_sales, bill_date, location") \
         .eq("bill_date", target_str)
@@ -173,7 +168,7 @@ def get_calls_for_mobiles(mobile_list):
             
     cdf = pd.DataFrame(all_calls)
     if not cdf.empty:
-        cdf['display_time'] = cdf['call_time'].fillna(cdf['call_date'])
+        cdf['display_time'] = cdf['call_date'].astype(str)
         cdf['parsed_date'] = pd.to_datetime(cdf['call_date'], errors='coerce').dt.date
         if 'feedback_type' not in cdf.columns:
             cdf['feedback_type'] = 'General'
@@ -182,7 +177,7 @@ def get_calls_for_mobiles(mobile_list):
         if 'outreach_type' not in cdf.columns:
             cdf['outreach_type'] = 'Daily High Value'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -234,7 +229,6 @@ if uploaded_file is not None:
                 records = clean_df.to_dict(orient='records')
                 total_recs = len(records)
 
-                # Batch size reduced to 500 to prevent HTTP timeouts on Render
                 chunk_size = 500
                 progress_bar = st.sidebar.progress(0)
                 
@@ -283,7 +277,7 @@ start_date = col_s1.date_input("From Date:", value=today_date, key="analytics_fr
 end_date = col_s2.date_input("To Date:", value=today_date, key="analytics_to_date")
 
 # ==========================================
-# OVERVIEW METRICS (RANGE FILTERED)
+# OVERVIEW METRICS
 # ==========================================
 range_calls_df = get_call_logs_by_range(start_date, end_date, selected_store, outreach_filter)
 
@@ -386,7 +380,7 @@ with tab1:
                     st.info(f"📞 **Last Call Outcome:** {latest_call.get('display_time', '')} | Status: **{latest_call['status']}** | Type: **{latest_call.get('outreach_type', 'Daily High Value')}** | Feedback: **{latest_call.get('feedback_type', 'N/A')}**")
                     if latest_call['comments']:
                         st.write(f"💬 *Remarks:* {latest_call['comments']}")
-                    st.dataframe(cust_calls[['display_time', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
+                    st.dataframe(cust_calls[['display_time', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date'}).iloc[::-1], use_container_width=True, hide_index=True)
                 else:
                     st.info("ℹ️ No past calls recorded for this customer.")
                 
@@ -414,10 +408,9 @@ with tab1:
                             "status": c_status,
                             "feedback_type": c_feedback,
                             "comments": c_comments,
-                            "call_date": current_date_str,
-                            "call_time": current_time_str
+                            "call_date": current_date_str
                         }).execute()
-                        st.success(f"Feedback logged as [{current_outreach_tag}] for {cust_store}!")
+                        st.success(f"Feedback logged for {cust_store}!")
                         st.cache_data.clear() 
                         st.rerun()
     else:
@@ -444,7 +437,6 @@ with tab2:
             feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
             st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
             
-            # CSV EXPORT FOR ANALYTICS SUMMARY
             analytics_csv = feedback_summary.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Export Analytics Summary CSV",
@@ -465,11 +457,10 @@ with tab3:
     
     if not range_calls_df.empty:
         audit_df = range_calls_df[['display_time', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
-        audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
+        audit_df.columns = ['Date', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
         
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
         
-        # CSV EXPORT FOR DETAILED AUDIT LOG
         audit_csv = audit_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Export Call Audit Log CSV",
