@@ -63,7 +63,6 @@ current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_active_stores():
-    """Uses RPC to pull unique stores instantly across large records."""
     try:
         res = supabase.rpc("get_distinct_locations").execute()
         if res.data:
@@ -79,13 +78,21 @@ def get_active_stores():
     ]
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_call_logs_by_date(target_d):
-    """Fetches call logs for a single target date."""
-    target_str = target_d.strftime("%Y-%m-%d")
-    response = supabase.table("call_logs").select("*") \
-        .eq("call_date", target_str) \
-        .execute()
+def get_call_logs_by_range(start_d, end_d, store_filter="All Stores", type_filter="All Types"):
+    start_str = start_d.strftime("%Y-%m-%d")
+    end_str = end_d.strftime("%Y-%m-%d")
     
+    query = supabase.table("call_logs").select("*") \
+        .gte("call_date", start_str) \
+        .lte("call_date", end_str)
+        
+    if store_filter != "All Stores":
+        query = query.ilike("location", store_filter.strip())
+        
+    if type_filter != "All Types":
+        query = query.eq("outreach_type", type_filter)
+        
+    response = query.execute()
     df = pd.DataFrame(response.data)
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
@@ -96,27 +103,60 @@ def get_call_logs_by_date(target_d):
             df['location'] = 'Unassigned'
         else:
             df['location'] = df['location'].fillna('Unassigned')
+        if 'outreach_type' not in df.columns:
+            df['outreach_type'] = 'Daily High Value'
+        else:
+            df['outreach_type'] = df['outreach_type'].fillna('Daily High Value')
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_bills_by_single_date(target_d, store_filter="All Stores"):
-    """Fetches bills for ONE SINGLE target date for max performance."""
+    """Fetches top 40 bills for ONE SINGLE target date for Regular High Value Calling."""
     target_str = target_d.strftime("%Y-%m-%d")
     query = supabase.table("bills").select("customer_name, customer_code, net_sales, bill_date, location") \
         .eq("bill_date", target_str)
         
     if store_filter != "All Stores":
-        query = query.eq("location", store_filter)
+        query = query.ilike("location", store_filter.strip())
         
     response = query.execute()
     df = pd.DataFrame(response.data)
     if not df.empty:
         df['bill_date'] = pd.to_datetime(df['bill_date']).dt.date
         df['customer_code'] = df['customer_code'].fillna("No Mobile").astype(str).str.strip()
-        df.loc[df['customer_code'] == "", 'customer_code'] = "No Mobile"
+        df = df[(df['customer_code'] != "No Mobile") & (df['customer_code'] != "nan") & (df['customer_code'] != "")]
         df['customer_name'] = df['customer_name'].fillna("Guest").astype(str).str.strip()
         df['net_sales'] = pd.to_numeric(df['net_sales'], errors='coerce').fillna(0)
-    return df
+        
+        summary = df.groupby(['customer_code', 'customer_name', 'location']).agg(
+            last_bill_amount=('net_sales', 'sum'),
+            last_billed_date=('bill_date', 'max')
+        ).reset_index()
+        summary['days_inactive'] = summary['last_billed_date'].apply(lambda d: (today_date - d).days)
+        
+        # Capped to top 40 shoppers
+        return summary.sort_values(by="last_bill_amount", ascending=False).head(40)
+        
+    return pd.DataFrame()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_retention_customers(store_filter="All Stores", min_days=45, max_days=60):
+    try:
+        res = supabase.rpc("get_retention_targets", {
+            "p_store": store_filter,
+            "p_min_days": min_days,
+            "p_max_days": max_days
+        }).execute()
+        
+        if res.data:
+            df = pd.DataFrame(res.data)
+            df['last_billed_date'] = pd.to_datetime(df['last_billed_date']).dt.date
+            df['last_bill_amount'] = pd.to_numeric(df['last_bill_amount'], errors='coerce').fillna(0)
+            return df
+    except Exception as e:
+        st.error(f"Retention RPC Error: {e}")
+        
+    return pd.DataFrame()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_calls_for_mobiles(mobile_list):
@@ -137,8 +177,10 @@ def get_calls_for_mobiles(mobile_list):
             cdf['feedback_type'] = 'General'
         if 'location' not in cdf.columns:
             cdf['location'] = 'Unassigned'
+        if 'outreach_type' not in cdf.columns:
+            cdf['outreach_type'] = 'Daily High Value'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -216,38 +258,30 @@ if st.sidebar.button("❌ Delete Bills for Selected Date"):
     except Exception as e:
         st.sidebar.error(f"❌ Delete Error: {e}")
 
-# 4. DASHBOARD CONTROLS (SINGLE GLOBAL DATE FILTER)
+# 4. GLOBAL DASHBOARD CONTROLS
 st.sidebar.markdown("---")
 st.sidebar.subheader("Dashboard Controls")
 stores_list = get_active_stores()
 selected_store = st.sidebar.selectbox("Select Store", stores_list)
 
-selected_date = st.sidebar.date_input(
-    "Select Target Date:", 
-    value=today_date - timedelta(days=1),
-    key="master_selected_date"
-)
+st.sidebar.markdown("**Analytics & Audit Filters:**")
+outreach_filter = st.sidebar.selectbox("Outreach Strategy Filter", ["All Types", "Daily High Value", "Retention Target"])
+col_s1, col_s2 = st.sidebar.columns(2)
+start_date = col_s1.date_input("From Date:", value=today_date, key="analytics_start_date")
+end_date = col_s2.date_input("To Date:", value=today_date, key="analytics_end_date")
 
 # ==========================================
-# OVERVIEW METRICS
+# OVERVIEW METRICS (RANGE FILTERED)
 # ==========================================
-all_calls_df = get_call_logs_by_date(selected_date)
+range_calls_df = get_call_logs_by_range(start_date, end_date, selected_store, outreach_filter)
 
-if not all_calls_df.empty:
-    if selected_store != "All Stores":
-        filtered_calls_df = all_calls_df[all_calls_df['location'] == selected_store]
-    else:
-        filtered_calls_df = all_calls_df
-else:
-    filtered_calls_df = pd.DataFrame(columns=['id', 'mobile_number', 'call_date', 'status', 'feedback_type', 'comments', 'call_time', 'location'])
+total_calls = len(range_calls_df)
+answered_df = range_calls_df[range_calls_df['status'] == 'Answered'] if not range_calls_df.empty else pd.DataFrame()
+complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Complaint', na=False)]) if not answered_df.empty else 0
+good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)]) if not answered_df.empty else 0
+suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)]) if not answered_df.empty else 0
 
-total_calls = len(filtered_calls_df)
-answered_df = filtered_calls_df[filtered_calls_df['status'] == 'Answered']
-complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Complaint', na=False)])
-good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)])
-suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)])
-
-st.markdown(f"### 📊 Call Summary for Date: **{selected_date.strftime('%d %b %Y')}**")
+st.markdown(f"### 📊 Call Summary Range: **{start_date.strftime('%d %b %Y')}** to **{end_date.strftime('%d %b %Y')}**")
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("📞 Total Calls", f"{total_calls:,}")
 kpi2.metric("✅ Answered Calls", f"{len(answered_df):,}")
@@ -260,46 +294,51 @@ st.markdown("---")
 # ==========================================
 # TABS SETUP
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["📞 Feedback Calling List", "🏬 Store Feedback Analytics", "📜 Call & Feedback Audit"])
+tab1, tab2, tab3 = st.tabs(["📞 Customer Calling List", "🏬 Store Feedback Analytics", "📜 Call & Feedback Audit"])
 
-# TAB 1: SINGLE-DATE TARGET CALLING LIST (WITH RETENTION)
+# TAB 1: DUAL-MODE CALLING LIST
 with tab1:
-    st.header(f"🎯 Target Shoppers for {selected_date.strftime('%d %b %Y')}")
+    st.header("🎯 Customer Outreach & Calling Queue")
     
-    call_mode = st.radio(
-        "Select Target Customer Type:", 
-        ["🏆 High Value Shoppers", "⚠️ Retention Targets (Uncontacted)"], 
-        horizontal=True, 
-        key="t1_mode"
+    call_type = st.radio(
+        "Select Outreach Strategy:",
+        ["📅 Daily High Value Shoppers (By Bill Date)", "⏳ Automated Retention Targets (By Inactivity)"],
+        horizontal=True,
+        key="main_call_strategy"
     )
     
-    with st.spinner(f"Fetching shoppers for {selected_date}..."):
-        base_df = get_bills_by_single_date(selected_date, selected_store)
+    if call_type == "📅 Daily High Value Shoppers (By Bill Date)":
+        current_outreach_tag = "Daily High Value"
+        target_bill_date = st.date_input(
+            "Select Bill Date to Target:",
+            value=today_date - timedelta(days=1),
+            key="daily_calling_bill_date"
+        )
+        st.caption(f"Showing top 40 spenders who shopped on **{target_bill_date.strftime('%d %b %Y')}**.")
         
-    if not base_df.empty:
-        base_df = base_df[(base_df['customer_code'] != "No Mobile") & (base_df['customer_code'] != "nan")]
-        
-        customer_summary = base_df.groupby(['customer_code', 'customer_name', 'location']).agg(
-            total_spent=('net_sales', 'sum'),
-            last_visit=('bill_date', 'max')
-        ).reset_index()
-
-        if call_mode == "🏆 High Value Shoppers":
-            display_df = customer_summary.sort_values(by="total_spent", ascending=False).head(50)
-        else:
-            # Retention mode: Exclude customers who have an answered call
-            mobs = customer_summary['customer_code'].tolist()
-            past_calls = get_calls_for_mobiles(mobs)
+        with st.spinner(f"Fetching shoppers for {target_bill_date}..."):
+            display_df = get_bills_by_single_date(target_bill_date, selected_store)
             
-            if not past_calls.empty:
-                answered_mobs = past_calls[past_calls['status'] == 'Answered']['mobile_number'].unique()
-                display_df = customer_summary[~customer_summary['customer_code'].isin(answered_mobs)]
-            else:
-                display_df = customer_summary
-                
-            display_df = display_df.sort_values(by="total_spent", ascending=False).head(50)
     else:
-        display_df = pd.DataFrame()
+        current_outreach_tag = "Retention Target"
+        retention_bucket = st.radio(
+            "Select Inactivity Window:", 
+            ["⚠️ 45 - 60 Days Inactive", "🚨 60 - 90 Days Inactive", "🔴 90+ Days Inactive"], 
+            horizontal=True, 
+            key="ret_bucket"
+        )
+        
+        if retention_bucket == "⚠️ 45 - 60 Days Inactive":
+            min_d, max_d = 45, 60
+        elif retention_bucket == "🚨 60 - 90 Days Inactive":
+            min_d, max_d = 60, 90
+        else:
+            min_d, max_d = 90, 365
+            
+        st.caption(f"Calculated automatically relative to Today's Date ({today_date.strftime('%d %b %Y')}). Capped at top 40.")
+        
+        with st.spinner(f"Fetching churn-risk shoppers for {retention_bucket}..."):
+            display_df = get_retention_customers(selected_store, min_days=min_d, max_days=max_d)
 
     st.markdown("### 👇 Click customer to log call status & feedback")
     
@@ -322,14 +361,20 @@ with tab1:
                 if latest_call['status'] == 'Answered' and call_d and call_d < today_date and call_d >= (today_date - timedelta(days=30)):
                     is_recently_answered = True
             
-            header_title = f"{row['customer_name']} | 📱 {mob} | Spent: {format_inr(row['total_spent'])} | Date: {row['last_visit']} | [{call_status_label}]"
+            last_bill_amt = row.get('last_bill_amount', 0)
+            last_billed_str = row['last_billed_date'].strftime('%d %b %Y')
+            days_inactive = row['days_inactive']
+            
+            header_title = f"{row['customer_name']} | 📱 {mob} | Last Bill: {format_inr(last_bill_amt)} | Last Billed: {last_billed_str} ({days_inactive} days ago) | [{call_status_label}]"
             
             with st.expander(header_title):
+                st.markdown(f"🗓️ **Last Visit Details:** Customer last shopped at **{cust_store}** on **{last_billed_str}** (**{days_inactive} days ago**).")
+                
                 if not cust_calls.empty:
-                    st.info(f"📞 **Last Call Outcome:** {latest_call.get('display_time', '')} | Status: **{latest_call['status']}** | Feedback: **{latest_call.get('feedback_type', 'N/A')}**")
+                    st.info(f"📞 **Last Call Outcome:** {latest_call.get('display_time', '')} | Status: **{latest_call['status']}** | Type: **{latest_call.get('outreach_type', 'Daily High Value')}** | Feedback: **{latest_call.get('feedback_type', 'N/A')}**")
                     if latest_call['comments']:
                         st.write(f"💬 *Remarks:* {latest_call['comments']}")
-                    st.dataframe(cust_calls[['display_time', 'location', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
+                    st.dataframe(cust_calls[['display_time', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
                 else:
                     st.info("ℹ️ No past calls recorded for this customer.")
                 
@@ -350,51 +395,54 @@ with tab1:
                     c_comments = st.text_area("Detailed Customer Remarks / Notes", key=f"comm_{mob}_{index}")
                     
                     if st.button("Save Feedback", key=f"btn_{mob}_{index}"):
-                        # Save EXACT store location directly into call_logs
                         supabase.table("call_logs").insert({
                             "mobile_number": mob,
                             "location": cust_store,
+                            "outreach_type": current_outreach_tag,
                             "status": c_status,
                             "feedback_type": c_feedback,
                             "comments": c_comments,
                             "call_date": current_date_str,
                             "call_time": current_time_str
                         }).execute()
-                        st.success(f"Feedback logged successfully for {cust_store}!")
+                        st.success(f"Feedback logged as [{current_outreach_tag}] for {cust_store}!")
                         st.cache_data.clear() 
                         st.rerun()
     else:
-        st.write("No customers found for this specific date.")
+        st.write("No customers found for the selected criteria.")
 
 # TAB 2: STORE FEEDBACK ANALYTICS
 with tab2:
-    st.header(f"🏬 Store Feedback Summary for {selected_date.strftime('%d %b %Y')}")
+    st.header(f"🏬 Store Analytics ({start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')})")
+    st.caption(f"Filtered by Outreach Strategy: **{outreach_filter}**")
     
-    if not all_calls_df.empty:
+    if not range_calls_df.empty:
         st.markdown("### 📊 Store Call Connection Breakdown")
-        store_calls = all_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
+        store_calls = range_calls_df.groupby(['location', 'status']).size().unstack(fill_value=0).reset_index()
         for col in ["Answered", "Not Answered", "Not Reachable", "Switched Off"]:
             if col not in store_calls.columns: store_calls[col] = 0
         st.dataframe(store_calls, use_container_width=True, hide_index=True)
         
         st.markdown("---")
         st.markdown("### 💬 Answered Calls Feedback Breakdown")
-        answered_calls_df = all_calls_df[all_calls_df['status'] == 'Answered']
+        answered_calls_df = range_calls_df[range_calls_df['status'] == 'Answered']
         
         if not answered_calls_df.empty:
             feedback_summary = answered_calls_df.groupby(['location', 'feedback_type']).size().unstack(fill_value=0).reset_index()
             st.dataframe(feedback_summary, use_container_width=True, hide_index=True)
         else:
-            st.info("No answered calls logged on this date.")
+            st.info("No answered calls logged within this date range.")
     else:
-        st.info("No call logs found for the selected date.")
+        st.info("No call logs found for the selected date range.")
 
 # TAB 3: AUDIT
 with tab3:
-    st.header(f"📜 Call & Feedback Audit Log for {selected_date.strftime('%d %b %Y')}")
-    if not filtered_calls_df.empty:
-        audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
-        audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Feedback Category', 'Customer Remarks']
+    st.header(f"📜 Call & Feedback Audit Log ({start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')})")
+    st.caption(f"Filtered by Outreach Strategy: **{outreach_filter}**")
+    
+    if not range_calls_df.empty:
+        audit_df = range_calls_df[['display_time', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
+        audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
     else:
-        st.info("No call audit records found for this date.")
+        st.info("No call audit records found for this date range.")
