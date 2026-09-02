@@ -134,7 +134,6 @@ def get_bills_by_single_date(target_d, store_filter="All Stores"):
         ).reset_index()
         summary['days_inactive'] = summary['last_billed_date'].apply(lambda d: (today_date - d).days)
         
-        # Capped to top 40 shoppers
         return summary.sort_values(by="last_bill_amount", ascending=False).head(40)
         
     return pd.DataFrame()
@@ -232,10 +231,14 @@ if uploaded_file is not None:
                 records = clean_df.to_dict(orient='records')
                 total_recs = len(records)
 
-                chunk_size = 2000
+                # Batch size reduced to 500 to prevent HTTP timeouts on Render
+                chunk_size = 500
+                progress_bar = st.sidebar.progress(0)
+                
                 for i in range(0, total_recs, chunk_size):
                     chunk = records[i:i + chunk_size]
                     supabase.table("bills").insert(chunk).execute()
+                    progress_bar.progress(min(1.0, (i + chunk_size) / total_recs))
 
                 st.sidebar.success(f"✅ {total_recs:,} rows uploaded successfully!")
                 st.cache_data.clear()
@@ -243,7 +246,7 @@ if uploaded_file is not None:
             except Exception as e:
                 st.sidebar.error(f"❌ Upload Error: {e}")
 
-# 3. DELETE WRONG UPLOAD
+# 3. DELETE WRONG UPLOADS
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗑️ Delete Wrong Upload")
 delete_date = st.sidebar.date_input("Select Bill Date to Delete", value=today_date, key="del_date_input")
