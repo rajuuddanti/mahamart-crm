@@ -18,16 +18,14 @@ hide_st_style = """
         cursor: default !important;
     }
     
-    /* MOBILE UI OPTIMIZATIONS (Applies when screen width is under 768px) */
+    /* MOBILE UI OPTIMIZATIONS (Applies under 768px screen width) */
     @media (max-width: 768px) {
-        /* Maximize usable screen real estate */
         .block-container {
             padding-left: 0.5rem !important;
             padding-right: 0.5rem !important;
             padding-top: 0.5rem !important;
         }
         
-        /* Make top KPI metric cards compact and centered for mobile vertical scrolling */
         [data-testid="stMetricValue"] {
             font-size: 1.1rem !important;
         }
@@ -35,7 +33,6 @@ hide_st_style = """
             font-size: 0.75rem !important;
         }
         
-        /* Full-width thumb-friendly buttons */
         .stButton button, .stDownloadButton button {
             width: 100% !important;
             min-height: 46px !important;
@@ -44,19 +41,16 @@ hide_st_style = """
             margin-bottom: 0.2rem !important;
         }
         
-        /* Stretch input boxes and dropdowns to full screen width */
         .stSelectbox, .stDateInput, .stTextArea {
             width: 100% !important;
         }
         
-        /* Enable smooth side-swiping on mobile tables */
         [data-testid="stDataFrame"] {
             width: 100% !important;
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch;
         }
         
-        /* Mobile-optimized customer card header size */
         .streamlit-expanderHeader {
             font-size: 0.85rem !important;
             padding: 0.5rem !important;
@@ -143,6 +137,10 @@ def get_call_logs_by_range(start_d, end_d, store_filter="All Stores", type_filte
     if not df.empty:
         df['call_date'] = pd.to_datetime(df['call_date'], errors='coerce').dt.date
         df['display_time'] = df['call_date'].astype(str)
+        if 'customer_name' not in df.columns:
+            df['customer_name'] = 'Guest'
+        else:
+            df['customer_name'] = df['customer_name'].fillna('Guest')
         if 'feedback_type' not in df.columns:
             df['feedback_type'] = 'General'
         if 'location' not in df.columns:
@@ -217,6 +215,8 @@ def get_calls_for_mobiles(mobile_list):
     if not cdf.empty:
         cdf['display_time'] = cdf['call_date'].astype(str)
         cdf['parsed_date'] = pd.to_datetime(cdf['call_date'], errors='coerce').dt.date
+        if 'customer_name' not in cdf.columns:
+            cdf['customer_name'] = 'Guest'
         if 'feedback_type' not in cdf.columns:
             cdf['feedback_type'] = 'General'
         if 'location' not in cdf.columns:
@@ -224,7 +224,7 @@ def get_calls_for_mobiles(mobile_list):
         if 'outreach_type' not in cdf.columns:
             cdf['outreach_type'] = 'Daily High Value'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'customer_name', 'call_date', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location', 'outreach_type'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -451,6 +451,7 @@ with tab1:
                     if st.button("Save Feedback", key=f"btn_{mob}_{index}"):
                         supabase.table("call_logs").insert({
                             "mobile_number": mob,
+                            "customer_name": cust_name,
                             "location": cust_store,
                             "outreach_type": current_outreach_tag,
                             "status": c_status,
@@ -504,8 +505,8 @@ with tab3:
     st.caption(f"Filtered by Outreach Strategy: **{outreach_filter}**")
     
     if not range_calls_df.empty:
-        audit_df = range_calls_df[['display_time', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
-        audit_df.columns = ['Date', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
+        audit_df = range_calls_df[['display_time', 'customer_name', 'mobile_number', 'location', 'outreach_type', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
+        audit_df.columns = ['Date', 'Customer Name', 'Mobile Number', 'Store Location', 'Outreach Strategy', 'Status', 'Feedback Category', 'Customer Remarks']
         
         st.dataframe(audit_df, use_container_width=True, hide_index=True)
         
