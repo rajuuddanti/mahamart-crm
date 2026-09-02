@@ -58,31 +58,25 @@ current_date_str = today_date.strftime('%Y-%m-%d')
 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # ==========================================
-# FAST SERVER-SIDE FETCHING FUNCTIONS
+# SERVER-SIDE FETCHING FUNCTIONS
 # ==========================================
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_active_stores():
-    """Fetches unique stores by inspecting recent bills from latest date in DB."""
+    """Uses RPC to pull unique stores instantly across large records."""
     try:
-        latest_res = supabase.table("bills").select("bill_date").order("bill_date", desc=True).limit(1).execute()
-        if latest_res.data:
-            max_d = pd.to_datetime(latest_res.data[0]['bill_date']).date()
-            min_d = max_d - timedelta(days=60)
-            
-            res = supabase.table("bills").select("location") \
-                .gte("bill_date", min_d.strftime("%Y-%m-%d")) \
-                .lte("bill_date", max_d.strftime("%Y-%m-%d")) \
-                .limit(5000).execute()
-                
-            if res.data:
-                df = pd.DataFrame(res.data)
-                stores = df['location'].dropna().str.strip().unique().tolist()
-                stores = [s for s in stores if s and s != "nan"]
-                return ["All Stores"] + sorted(stores)
+        res = supabase.rpc("get_distinct_locations").execute()
+        if res.data:
+            stores = [r['location'] for r in res.data if r.get('location')]
+            return ["All Stores"] + sorted(stores)
     except Exception:
         pass
-    return ["All Stores"]
+    
+    return [
+        "All Stores", "Burugupally", "Choppadandi", "Dharmaram", "Ellanthakunta", 
+        "Gangadhara", "Gangadhara New", "Gharshakurthy", "Gopalrao Pet", "Koheda", 
+        "MALLIAL", "PEGADAPALLY NEW", "PEGADAPALLY OLD", "Raikal", "vemulawada", "Vidya Nagar"
+    ]
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_call_logs_by_date(target_d):
@@ -98,11 +92,15 @@ def get_call_logs_by_date(target_d):
         df['display_time'] = df['call_time'].fillna(df['call_date'].astype(str))
         if 'feedback_type' not in df.columns:
             df['feedback_type'] = 'General'
+        if 'location' not in df.columns:
+            df['location'] = 'Unassigned'
+        else:
+            df['location'] = df['location'].fillna('Unassigned')
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_bills_by_single_date(target_d, store_filter="All Stores"):
-    """Fetches bills for ONE SINGLE target date for maximum performance."""
+    """Fetches bills for ONE SINGLE target date for max performance."""
     target_str = target_d.strftime("%Y-%m-%d")
     query = supabase.table("bills").select("customer_name, customer_code, net_sales, bill_date, location") \
         .eq("bill_date", target_str)
@@ -137,8 +135,10 @@ def get_calls_for_mobiles(mobile_list):
         cdf['parsed_date'] = pd.to_datetime(cdf['call_date'], errors='coerce').dt.date
         if 'feedback_type' not in cdf.columns:
             cdf['feedback_type'] = 'General'
+        if 'location' not in cdf.columns:
+            cdf['location'] = 'Unassigned'
     else:
-        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments'])
+        cdf = pd.DataFrame(columns=['mobile_number', 'call_date', 'call_time', 'display_time', 'parsed_date', 'status', 'feedback_type', 'comments', 'location'])
     return cdf
 
 # --- SIDEBAR CONTROLS & WEB UPLOADER ---
@@ -216,32 +216,24 @@ if st.sidebar.button("❌ Delete Bills for Selected Date"):
     except Exception as e:
         st.sidebar.error(f"❌ Delete Error: {e}")
 
+# 4. DASHBOARD CONTROLS (SINGLE GLOBAL DATE FILTER)
 st.sidebar.markdown("---")
 st.sidebar.subheader("Dashboard Controls")
 stores_list = get_active_stores()
 selected_store = st.sidebar.selectbox("Select Store", stores_list)
 
-# RESTRICTED SINGLE DATE FILTER FOR CALL LOGS
-target_call_date = st.sidebar.date_input(
-    "Select Target Call Date:", 
-    value=today_date,
-    key="target_call_date"
+selected_date = st.sidebar.date_input(
+    "Select Target Date:", 
+    value=today_date - timedelta(days=1),
+    key="master_selected_date"
 )
 
 # ==========================================
 # OVERVIEW METRICS
 # ==========================================
-all_calls_df = get_call_logs_by_date(target_call_date)
+all_calls_df = get_call_logs_by_date(selected_date)
 
 if not all_calls_df.empty:
-    mobs = all_calls_df['mobile_number'].unique().tolist()
-    bills_for_calls = supabase.table("bills").select("customer_code, location").in_("customer_code", mobs[:500]).execute()
-    if bills_for_calls.data:
-        store_map = pd.DataFrame(bills_for_calls.data).drop_duplicates(subset=['customer_code']).set_index('customer_code')['location'].to_dict()
-        all_calls_df['location'] = all_calls_df['mobile_number'].map(store_map).fillna("Unassigned")
-    else:
-        all_calls_df['location'] = "Unassigned"
-        
     if selected_store != "All Stores":
         filtered_calls_df = all_calls_df[all_calls_df['location'] == selected_store]
     else:
@@ -255,7 +247,7 @@ complaints_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Comp
 good_service_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Good Service', na=False)])
 suggestions_cnt = len(answered_df[answered_df['feedback_type'].str.contains('Suggestion', na=False)])
 
-st.markdown(f"### 📊 Call Summary for Date: **{target_call_date.strftime('%d %b %Y')}**")
+st.markdown(f"### 📊 Call Summary for Date: **{selected_date.strftime('%d %b %Y')}**")
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("📞 Total Calls", f"{total_calls:,}")
 kpi2.metric("✅ Answered Calls", f"{len(answered_df):,}")
@@ -270,22 +262,42 @@ st.markdown("---")
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["📞 Feedback Calling List", "🏬 Store Feedback Analytics", "📜 Call & Feedback Audit"])
 
-# TAB 1: SINGLE-DATE TARGET CALLING LIST
+# TAB 1: SINGLE-DATE TARGET CALLING LIST (WITH RETENTION)
 with tab1:
-    st.header("🎯 Customer Calling & Feedback Logging")
+    st.header(f"🎯 Target Shoppers for {selected_date.strftime('%d %b %Y')}")
     
-    st.subheader("High Value Shoppers by Single Date")
-    single_bill_date = st.date_input("Select Shopping Date:", value=today_date - timedelta(days=1), key="single_bill_date")
-        
-    with st.spinner(f"Fetching shoppers for {single_bill_date}..."):
-        base_df = get_bills_by_single_date(single_bill_date, selected_store)
+    call_mode = st.radio(
+        "Select Target Customer Type:", 
+        ["🏆 High Value Shoppers", "⚠️ Retention Targets (Uncontacted)"], 
+        horizontal=True, 
+        key="t1_mode"
+    )
+    
+    with st.spinner(f"Fetching shoppers for {selected_date}..."):
+        base_df = get_bills_by_single_date(selected_date, selected_store)
         
     if not base_df.empty:
         base_df = base_df[(base_df['customer_code'] != "No Mobile") & (base_df['customer_code'] != "nan")]
-        display_df = base_df.groupby(['customer_code', 'customer_name']).agg(
+        
+        customer_summary = base_df.groupby(['customer_code', 'customer_name', 'location']).agg(
             total_spent=('net_sales', 'sum'),
             last_visit=('bill_date', 'max')
-        ).reset_index().sort_values(by="total_spent", ascending=False).head(50)
+        ).reset_index()
+
+        if call_mode == "🏆 High Value Shoppers":
+            display_df = customer_summary.sort_values(by="total_spent", ascending=False).head(50)
+        else:
+            # Retention mode: Exclude customers who have an answered call
+            mobs = customer_summary['customer_code'].tolist()
+            past_calls = get_calls_for_mobiles(mobs)
+            
+            if not past_calls.empty:
+                answered_mobs = past_calls[past_calls['status'] == 'Answered']['mobile_number'].unique()
+                display_df = customer_summary[~customer_summary['customer_code'].isin(answered_mobs)]
+            else:
+                display_df = customer_summary
+                
+            display_df = display_df.sort_values(by="total_spent", ascending=False).head(50)
     else:
         display_df = pd.DataFrame()
 
@@ -297,6 +309,7 @@ with tab1:
         
         for index, row in display_df.iterrows():
             mob = str(row['customer_code'])
+            cust_store = str(row['location'])
             cust_calls = pd.DataFrame() if calls_df.empty else calls_df[calls_df['mobile_number'].astype(str) == mob]
             call_status_label = "Never Called"
             is_recently_answered = False
@@ -316,7 +329,7 @@ with tab1:
                     st.info(f"📞 **Last Call Outcome:** {latest_call.get('display_time', '')} | Status: **{latest_call['status']}** | Feedback: **{latest_call.get('feedback_type', 'N/A')}**")
                     if latest_call['comments']:
                         st.write(f"💬 *Remarks:* {latest_call['comments']}")
-                    st.dataframe(cust_calls[['display_time', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
+                    st.dataframe(cust_calls[['display_time', 'location', 'status', 'feedback_type', 'comments']].rename(columns={'display_time': 'call_date_time'}).iloc[::-1], use_container_width=True, hide_index=True)
                 else:
                     st.info("ℹ️ No past calls recorded for this customer.")
                 
@@ -337,23 +350,25 @@ with tab1:
                     c_comments = st.text_area("Detailed Customer Remarks / Notes", key=f"comm_{mob}_{index}")
                     
                     if st.button("Save Feedback", key=f"btn_{mob}_{index}"):
+                        # Save EXACT store location directly into call_logs
                         supabase.table("call_logs").insert({
                             "mobile_number": mob,
+                            "location": cust_store,
                             "status": c_status,
                             "feedback_type": c_feedback,
                             "comments": c_comments,
                             "call_date": current_date_str,
                             "call_time": current_time_str
                         }).execute()
-                        st.success("Feedback logged successfully!")
+                        st.success(f"Feedback logged successfully for {cust_store}!")
                         st.cache_data.clear() 
                         st.rerun()
     else:
         st.write("No customers found for this specific date.")
 
-# TAB 2: STORE FEEDBACK ANALYTICS (SINGLE DATE)
+# TAB 2: STORE FEEDBACK ANALYTICS
 with tab2:
-    st.header(f"🏬 Store Feedback Summary for {target_call_date.strftime('%d %b %Y')}")
+    st.header(f"🏬 Store Feedback Summary for {selected_date.strftime('%d %b %Y')}")
     
     if not all_calls_df.empty:
         st.markdown("### 📊 Store Call Connection Breakdown")
@@ -376,7 +391,7 @@ with tab2:
 
 # TAB 3: AUDIT
 with tab3:
-    st.header(f"📜 Call & Feedback Audit Log for {target_call_date.strftime('%d %b %Y')}")
+    st.header(f"📜 Call & Feedback Audit Log for {selected_date.strftime('%d %b %Y')}")
     if not filtered_calls_df.empty:
         audit_df = filtered_calls_df[['display_time', 'mobile_number', 'location', 'status', 'feedback_type', 'comments']].sort_values(by="display_time", ascending=False)
         audit_df.columns = ['Date & Time', 'Mobile Number', 'Store Location', 'Status', 'Feedback Category', 'Customer Remarks']
