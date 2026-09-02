@@ -4,20 +4,59 @@ import pandas as pd
 from supabase import create_client
 from datetime import datetime, timedelta
 
-# --- PAGE SETUP ---
+# --- PAGE SETUP & MOBILE-FIRST RESPONSIVE CSS ---
 st.set_page_config(page_title="MahaMart Feedback CRM", layout="wide")
 
 hide_st_style = """
-            <style>
-            footer {visibility: hidden !important;}
-            [data-testid="stViewerBadge"], #viewerBadge {
-                opacity: 0 !important;
-                pointer-events: none !important;
-                z-index: -9999 !important;
-                cursor: default !important;
-            }
-            </style>
-            """
+    <style>
+    /* Hide Streamlit default headers & footers */
+    footer {visibility: hidden !important;}
+    [data-testid="stViewerBadge"], #viewerBadge {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        z-index: -9999 !important;
+        cursor: default !important;
+    }
+    
+    /* Mobile-First Responsive Tweaks (Triggers under 768px screen width) */
+    @media (max-width: 768px) {
+        /* Maximize usable screen real estate */
+        .block-container {
+            padding-left: 0.6rem !important;
+            padding-right: 0.6rem !important;
+            padding-top: 0.8rem !important;
+        }
+        
+        /* Scale down KPI metric cards for portrait screens */
+        [data-testid="stMetricValue"] {
+            font-size: 1.2rem !important;
+        }
+        [data-testid="stMetricLabel"] {
+            font-size: 0.75rem !important;
+        }
+        
+        /* Thumb-friendly tap targets */
+        .stButton button, .stDownloadButton button {
+            width: 100% !important;
+            min-height: 44px !important;
+            margin-top: 0.3rem !important;
+            margin-bottom: 0.3rem !important;
+        }
+        
+        /* Keep tables scrollable without breaking mobile layout */
+        [data-testid="stDataFrame"] {
+            width: 100% !important;
+            overflow-x: auto !important;
+        }
+        
+        /* Tidy up expanders on narrow displays */
+        .streamlit-expanderHeader {
+            font-size: 0.9rem !important;
+            padding: 0.4rem !important;
+        }
+    }
+    </style>
+    """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
 st.title("🗣️ MahaMart Customer Feedback & Service CRM")
