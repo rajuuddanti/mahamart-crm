@@ -12,16 +12,18 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 2. Fetch today's call logs
+# 2. Fetch today's feedback data
 today_str = datetime.now().strftime("%Y-%m-%d")
-response = supabase.table("call_logs").select("*").gte("created_at", f"{today_str} 00:00:00").execute()
+
+# NOTE: Change 'feedback' below if your Supabase table has a different name (e.g., 'customer_feedback')
+response = supabase.table("feedback").select("*").gte("created_at", f"{today_str} 00:00:00").execute()
 
 if not response.data:
-    print(f"No call logs found for {today_str}. Skipping export.")
+    print(f"No feedback records found for {today_str}. Skipping export.")
     exit()
 
-# Save local temporary file
-date_filename = datetime.now().strftime("%d-%m-%Y") + ".csv"
+# Save local temporary file with "Feedback" in the name
+date_filename = f"Feedback_Report_{datetime.now().strftime('%d-%m-%Y')}.csv"
 local_path = f"/tmp/{date_filename}"
 df = pd.DataFrame(response.data)
 df.to_csv(local_path, index=False)
@@ -31,7 +33,7 @@ token_data = json.loads(os.environ.get("GOOGLE_DRIVE_TOKEN_JSON"))
 creds = Credentials.from_authorized_user_info(token_data, scopes=['https://www.googleapis.com/auth/drive.file'])
 drive_service = build('drive', 'v3', credentials=creds)
 
-# Helper function to get/create Year & Month folders
+# Helper function to get or create Year & Month folders
 def get_or_create_folder(folder_name, parent_id=None):
     query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     if parent_id:
@@ -53,7 +55,7 @@ ROOT_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
 year_folder = get_or_create_folder(datetime.now().strftime("%Y"), parent_id=ROOT_FOLDER_ID)
 month_folder = get_or_create_folder(datetime.now().strftime("%B"), parent_id=year_folder)
 
-# 5. Upload CSV File
+# 5. Upload Feedback CSV File
 file_metadata = {'name': date_filename, 'parents': [month_folder]}
 media = MediaFileUpload(local_path, mimetype='text/csv')
 drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
