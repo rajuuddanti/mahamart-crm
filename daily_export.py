@@ -30,34 +30,30 @@ token_data = json.loads(os.environ.get("GOOGLE_DRIVE_TOKEN_JSON"))
 creds = Credentials.from_authorized_user_info(token_data, scopes=['https://www.googleapis.com/auth/drive.file'])
 drive_service = build('drive', 'v3', credentials=creds)
 
-ROOT_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
-
 def get_or_create_folder(folder_name, parent_id=None):
     query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     if parent_id:
         query += f" and '{parent_id}' in parents"
     
-    try:
-        results = drive_service.files().list(q=query, fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-        files = results.get('files', [])
-        if files:
-            return files[0]['id']
-    except Exception as e:
-        print(f"Folder search warning: {e}")
-
-    meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-    if parent_id:
-        meta['parents'] = [parent_id]
+    results = drive_service.files().list(q=query, fields="files(id)").execute()
+    files = results.get('files', [])
     
-    return drive_service.files().create(body=meta, fields='id', supportsAllDrives=True).execute().get('id')
+    if files:
+        return files[0]['id']
+    else:
+        meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+        if parent_id:
+            meta['parents'] = [parent_id]
+        return drive_service.files().create(body=meta, fields='id').execute().get('id')
 
-# Create subfolders inside ROOT_FOLDER_ID (Year -> Month)
-year_folder = get_or_create_folder(datetime.now().strftime("%Y"), parent_id=ROOT_FOLDER_ID if ROOT_FOLDER_ID else None)
+# Create Root -> Year -> Month Structure
+root_folder = get_or_create_folder("Mahamart_Feedback_Reports")
+year_folder = get_or_create_folder(datetime.now().strftime("%Y"), parent_id=root_folder)
 month_folder = get_or_create_folder(datetime.now().strftime("%B"), parent_id=year_folder)
 
 # Upload CSV File
 file_metadata = {'name': date_filename, 'parents': [month_folder]}
 media = MediaFileUpload(local_path, mimetype='text/csv')
-drive_service.files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
+drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-print(f"Successfully uploaded {date_filename} into Google Drive folder structure!")
+print(f"Successfully uploaded {date_filename} into Mahamart_Feedback_Reports!")
