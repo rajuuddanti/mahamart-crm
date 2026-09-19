@@ -26,12 +26,12 @@ local_path = f"/tmp/{date_filename}"
 df = pd.DataFrame(response.data)
 df.to_csv(local_path, index=False)
 
-# 3. Google Drive Auth
+# 3. Google Drive Auth (using precise token scope)
 token_data = json.loads(os.environ.get("GOOGLE_DRIVE_TOKEN_JSON"))
-creds = Credentials.from_authorized_user_info(token_data, scopes=['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'])
+creds = Credentials.from_authorized_user_info(token_data, scopes=['https://www.googleapis.com/auth/drive.file'])
 drive_service = build('drive', 'v3', credentials=creds)
 
-# Verify parent folder access
+# Verify parent folder access safely
 ROOT_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
 if ROOT_FOLDER_ID:
     try:
