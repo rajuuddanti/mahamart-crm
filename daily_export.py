@@ -12,14 +12,14 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 2. Fetch today's feedback data
+# 2. Fetch today's call logs
 today_str = datetime.now().strftime("%Y-%m-%d")
 
-# NOTE: Change 'feedback' below if your Supabase table has a different name (e.g., 'customer_feedback')
-response = supabase.table("feedback").select("*").gte("created_at", f"{today_str} 00:00:00").execute()
+# NOTE: Change 'call_logs' below if your Supabase table has a different name
+response = supabase.table("call_logs").select("*").gte("created_at", f"{today_str} 00:00:00").execute()
 
 if not response.data:
-    print(f"No feedback records found for {today_str}. Skipping export.")
+    print(f"No call logs found for {today_str}. Skipping export.")
     exit()
 
 # Save local temporary file with "Feedback" in the name
