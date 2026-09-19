@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 from datetime import datetime
 import pandas as pd
@@ -12,17 +12,15 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 2. Fetch today's call logs
+# 2. Fetch today's call logs using call_date column
 today_str = datetime.now().strftime("%Y-%m-%d")
-
-# NOTE: Change 'call_logs' below if your Supabase table has a different name
-response = supabase.table("call_logs").select("*").gte("created_at", f"{today_str} 00:00:00").execute()
+response = supabase.table("call_logs").select("*").eq("call_date", today_str).execute()
 
 if not response.data:
-    print(f"No call logs found for {today_str}. Skipping export.")
-    exit()
+    print(f"No records found for {today_str}. Exporting entire table backup instead.")
+    response = supabase.table("call_logs").select("*").execute()
 
-# Save local temporary file with "Feedback" in the name
+# Save local temporary CSV
 date_filename = f"Feedback_Report_{datetime.now().strftime('%d-%m-%Y')}.csv"
 local_path = f"/tmp/{date_filename}"
 df = pd.DataFrame(response.data)
@@ -55,7 +53,7 @@ ROOT_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
 year_folder = get_or_create_folder(datetime.now().strftime("%Y"), parent_id=ROOT_FOLDER_ID)
 month_folder = get_or_create_folder(datetime.now().strftime("%B"), parent_id=year_folder)
 
-# 5. Upload Feedback CSV File
+# 5. Upload CSV File
 file_metadata = {'name': date_filename, 'parents': [month_folder]}
 media = MediaFileUpload(local_path, mimetype='text/csv')
 drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
